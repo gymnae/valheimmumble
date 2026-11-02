@@ -1,0 +1,66 @@
+name: Release
+
+# Builds the BepInEx server mod against the real Valheim dedicated server (downloaded anonymously via
+# SteamCMD) and publishes a GitHub release with the mod and the prebuilt Mumble plugin attached.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v2.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      VALHEIM_DIR: ${{ github.workspace }}/valheim-server
+    steps:
+      # On manual runs this builds the branch the workflow was started from (main), which must
+      # match the tag's code; the tag input only names the release.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download Valheim dedicated server (SteamCMD, anonymous)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lib32gcc-s1 lib32stdc++6
+          mkdir -p steamcmd && cd steamcmd
+          curl -sSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar xz
+          ./steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir "$VALHEIM_DIR" \
+            +login anonymous +app_update 896660 validate +quit
+          ls "$VALHEIM_DIR/valheim_server_Data/Managed/assembly_valheim.dll"
+
+      - name: Download BepInExPack Valheim
+        run: |
+          url=$(curl -sSL https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/ \
+                | jq -r '.latest.download_url')
+          echo "BepInExPack: $url"
+          curl -sSL -o bepinex.zip "$url"
+          unzip -q bepinex.zip -d bepinex
+          mkdir -p "$VALHEIM_DIR/BepInEx/core"
+          cp bepinex/BepInExPack_Valheim/BepInEx/core/*.dll "$VALHEIM_DIR/BepInEx/core/"
+
+      - name: Build server mod
+        run: |
+          dotnet build server-mod -c Release -p:ValheimDir="$VALHEIM_DIR"
+          mkdir -p out
+          cp server-mod/bin/Release/ValheimMumbleRadioServer.dll out/
+          cp dist/valheim_radio.mumble_plugin dist/radio_demo_0-100m.wav out/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          body_path: .github/release-notes.md
+          files: out/*
