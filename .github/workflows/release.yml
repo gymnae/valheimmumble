@@ -36,8 +36,15 @@ jobs:
           sudo apt-get install -y -qq lib32gcc-s1 lib32stdc++6
           mkdir -p steamcmd && cd steamcmd
           curl -sSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar xz
-          ./steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir "$VALHEIM_DIR" \
-            +login anonymous +app_update 896660 validate +quit
+          # First run only self-updates SteamCMD; app_update in that same run often fails with
+          # "Missing configuration", so warm up separately and retry the download.
+          ./steamcmd.sh +login anonymous +quit || true
+          for i in 1 2 3; do
+            ./steamcmd.sh +@sSteamCmdForcePlatformType linux +force_install_dir "$VALHEIM_DIR" \
+              +login anonymous +app_info_update 1 +app_update 896660 validate +quit || true
+            [ -f "$VALHEIM_DIR/valheim_server_Data/Managed/assembly_valheim.dll" ] && break
+            echo "SteamCMD attempt $i failed, retrying..."; sleep 5
+          done
           ls "$VALHEIM_DIR/valheim_server_Data/Managed/assembly_valheim.dll"
 
       - name: Download BepInExPack Valheim
