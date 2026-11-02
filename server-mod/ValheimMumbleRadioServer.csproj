@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>ValheimMumbleRadioServer</AssemblyName>
+    <RootNamespace>ValheimMumbleRadio</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Version>2.0.0</Version>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <!--
+    ValheimDir = a Valheim dedicated server install (valheim_server_Data) or a game install (valheim_Data),
+    with BepInEx installed. Override with: dotnet build -p:ValheimDir="D:\Servers\Valheim"
+  -->
+  <PropertyGroup Condition="'$(ValheimDir)' == '' And '$(OS)' == 'Windows_NT'">
+    <ValheimDir>C:\Program Files (x86)\Steam\steamapps\common\Valheim dedicated server</ValheimDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(ValheimDir)' == '' And '$(OS)' != 'Windows_NT'">
+    <ValheimDir>$(HOME)/.steam/steam/steamapps/common/Valheim dedicated server</ValheimDir>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManagedDir Condition="Exists('$(ValheimDir)/valheim_server_Data/Managed')">$(ValheimDir)/valheim_server_Data/Managed</ManagedDir>
+    <ManagedDir Condition="'$(ManagedDir)' == ''">$(ValheimDir)/valheim_Data/Managed</ManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(ValheimDir)/BepInEx/core/BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_valheim">
+      <HintPath>$(ManagedDir)/assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Some game types (e.g. ZDOID) may live here depending on the game version. -->
+    <Reference Include="assembly_utils" Condition="Exists('$(ManagedDir)/assembly_utils.dll')">
+      <HintPath>$(ManagedDir)/assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)/UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
