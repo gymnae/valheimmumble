@@ -109,19 +109,20 @@ dotnet build -c Release -p:ValheimDir="/path/to/Valheim dedicated server"
 # -> bin/Release/ValheimMumbleRadioServer.dll
 ```
 
-**Mumble plugin** (C++17; the only dependency is the vendored `include/MumblePlugin.h`, BSD license). The
-prebuilt bundle in `dist/` was cross-compiled with zig:
+**Mumble plugin** (C++17; the only dependency is the vendored `include/MumblePlugin.h`, BSD license).
+For your own machine:
 
 ```sh
 cd mumble-plugin
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release
-# or from Linux for both OSes (pip install ziglang):
-SRC="src/plugin.cpp src/RadioFx.cpp src/Settings.cpp"
-python -m ziglang c++ -target x86_64-windows-gnu -std=c++17 -O2 -s -shared -fvisibility=hidden \
-    -Iinclude -Isrc $SRC -lws2_32 -o valheim_radio.dll
-python -m ziglang c++ -target x86_64-linux-gnu.2.28 -std=c++17 -O2 -s -shared -fPIC -fvisibility=hidden \
-    -Iinclude -Isrc $SRC -o libvalheim_radio.so
-python3 tools/package.py ../dist/valheim_radio.mumble_plugin --windows valheim_radio.dll --linux libvalheim_radio.so
+```
+
+The release bundle in `dist/` holds builds for Windows (x64, x86, arm64), Linux (x64, x86, arm64,
+armv7) and macOS (universal: x64 + arm64). All are cross-compiled from Linux with zig
+(`pip install ziglang`):
+
+```sh
+mumble-plugin/tools/build_all.sh dist/valheim_radio.mumble_plugin
 ```
 
 **Tests:** run `tests/run_tests.sh` (Linux). It covers:

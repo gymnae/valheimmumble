@@ -62,7 +62,12 @@ jobs:
           dotnet build server-mod -c Release -p:ValheimDir="$VALHEIM_DIR"
           mkdir -p out
           cp server-mod/bin/Release/ValheimMumbleRadioServer.dll out/
-          cp dist/valheim_radio.mumble_plugin dist/radio_demo_0-100m.wav out/
+          cp dist/radio_demo_0-100m.wav out/
+
+      - name: Build Mumble plugin (Windows, Linux, macOS; x64, x86, arm64, armv7)
+        run: |
+          pip install ziglang==0.17.0
+          mumble-plugin/tools/build_all.sh "$PWD/out/valheim_radio.mumble_plugin"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

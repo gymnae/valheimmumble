@@ -37,6 +37,7 @@
 #	include <ws2tcpip.h>
 using socket_t                       = SOCKET;
 static constexpr socket_t kBadSocket = INVALID_SOCKET;
+static constexpr int kSendFlags     = 0;
 static void closeSocket(socket_t s) { closesocket(s); }
 static bool lastErrorIsTimeout() {
 	const int e = WSAGetLastError();
@@ -58,6 +59,12 @@ static void setNonBlocking(socket_t s, bool on) {
 #	include <unistd.h>
 using socket_t                       = int;
 static constexpr socket_t kBadSocket = -1;
+// A send() on a socket the server closed must not raise SIGPIPE: that would kill Mumble itself.
+#	ifdef MSG_NOSIGNAL
+static constexpr int kSendFlags = MSG_NOSIGNAL;
+#	else
+static constexpr int kSendFlags = 0; // macOS: SO_NOSIGPIPE is set on the socket instead
+#	endif
 static void closeSocket(socket_t s) { close(s); }
 static bool lastErrorIsTimeout() { return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR; }
 static void setNonBlocking(socket_t s, bool on) {
@@ -204,6 +211,9 @@ socket_t connectTcp(const vr::Endpoint &ep) {
 #else
 		timeval tv{ 0, 250000 };
 		setsockopt(result, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#	ifdef SO_NOSIGPIPE
+		setsockopt(result, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#	endif
 #endif
 	}
 	return result;
@@ -213,7 +223,7 @@ bool sendAll(socket_t s, const std::vector< uint8_t > &data) {
 	size_t off = 0;
 	while (off < data.size()) {
 		const int n = static_cast< int >(
-			send(s, reinterpret_cast< const char * >(data.data() + off), static_cast< int >(data.size() - off), 0));
+			send(s, reinterpret_cast< const char * >(data.data() + off), static_cast< int >(data.size() - off), kSendFlags));
 		if (n <= 0) {
 			return false;
 		}

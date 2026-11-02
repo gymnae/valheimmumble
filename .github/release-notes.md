@@ -5,7 +5,7 @@ Positional audio for Valheim in Mumble, with a walkie-talkie radio effect for di
 | File | Who installs it |
 |---|---|
 | `ValheimMumbleRadioServer.dll` | The server admin. Copy it to `BepInEx/plugins/` on the Valheim dedicated server (BepInExPack Valheim required). |
-| `valheim_radio.mumble_plugin` | Every player. Open it with Mumble 1.5 or later. |
+| `valheim_radio.mumble_plugin` | Every player. Open it with Mumble 1.5 or later. Works on Windows (x64, x86, arm64), Linux (x64, x86, arm64, armv7) and macOS (Intel and Apple Silicon). |
 | `radio_demo_0-100m.wav` | Optional. A demo of the effect from 0 to 100 m. |
 
 The server mod is built automatically against the current Valheim dedicated server. If a game update breaks it, rebuild it yourself: see [Building](https://github.com/gymnae/valheimmumble#building).
