@@ -82,7 +82,7 @@ The mod doesn't need to be installed on clients, and vanilla clients can join.
      Volume must never be 0**, or Mumble mutes far voices before they can turn into radio. Below about
      `RadioVolume` ÷ `MaxBoost` (18 % by default), far voices get quieter than intended. The log warns
      about both.
-3. *Settings → Audio Input → Transmit position* must be on, or nobody hears *you* in 3D.
+3. *Settings → Plugins → Link to Game and transmit position* must be on, or nobody hears *you* in 3D.
 4. Use your character name as your Mumble name, or set it in the ini (below).
 5. Join the channel and load into the world. Mumble's log shows `Valheim Radio: found you ("name") in the
    game - positional audio active`.
