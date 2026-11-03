@@ -410,12 +410,27 @@ std::string apiUserName(mumble_connection_t conn, mumble_userid_t uid) {
 	return takeString(name);
 }
 
-std::optional< vr::Endpoint > apiChannelTag(mumble_connection_t conn, mumble_channelid_t channel) {
+// Looks for the tag in a channel's description. `status` describes what was found, for the log.
+std::optional< vr::Endpoint > apiChannelTag(mumble_connection_t conn, mumble_channelid_t channel, std::string &status) {
+	std::string name;
+	const char *n = nullptr;
+	if (g_api.getChannelName(g_id, conn, channel, &n) == MUMBLE_STATUS_OK) {
+		name = takeString(n);
+	}
+	const std::string label = channel == 0 ? "root channel \"" + name + "\"" : "channel \"" + name + "\"";
 	const char *desc = nullptr;
 	if (g_api.getChannelDescription(g_id, conn, channel, &desc) != MUMBLE_STATUS_OK) {
+		status = label + ": description not available";
 		return std::nullopt;
 	}
-	return vr::findChannelTag(takeString(desc));
+	const std::string text = takeString(desc);
+	auto tag               = vr::findChannelTag(text);
+	if (text.empty()) {
+		status = label + ": description empty or not downloaded yet";
+	} else if (!tag) {
+		status = label + ": description has no valid valheim-radio= tag";
+	}
+	return tag;
 }
 
 void refreshPaSettings() {
@@ -489,6 +504,7 @@ struct MumbleView {
 	std::vector< mumble_userid_t > others;
 	std::unordered_map< mumble_userid_t, std::string > names;
 	std::optional< vr::Endpoint > tag;
+	std::string tagStatus; // why no tag was found
 };
 
 MumbleView readMumble() {
@@ -519,9 +535,12 @@ MumbleView readMumble() {
 	for (mumble_userid_t uid : v.others) {
 		v.names[uid] = vr::normalizeName(apiUserName(v.conn, uid));
 	}
-	v.tag = apiChannelTag(v.conn, channel);
+	std::string status;
+	v.tag = apiChannelTag(v.conn, channel, status);
+	v.tagStatus = status;
 	if (!v.tag && channel != 0) {
-		v.tag = apiChannelTag(v.conn, 0); // root channel
+		v.tag = apiChannelTag(v.conn, 0, status); // root channel
+		v.tagStatus += "; " + status;
 	}
 	return v;
 }
@@ -531,6 +550,7 @@ void workerLoop() {
 	vr::LocalSettings local;
 	auto nextMumble = Clock::now(), nextSettings = Clock::now(), nextAnnounce = Clock::now();
 	bool wasLinked = false;
+	std::string lastNoServer;
 	MumbleView view;
 
 	while (!g_stop.load()) {
@@ -563,6 +583,20 @@ void workerLoop() {
 				ep = *local.server;
 			} else if (view.connected && view.tag) {
 				ep = *view.tag;
+			}
+			// Say why we're not connecting, instead of staying silent.
+			std::string noServer;
+			if (view.connected && !ep.valid()) {
+				noServer = "no Valheim server address found (" + view.tagStatus
+						   + "). Mumble only sends channel descriptions longer than about 128 bytes (HTML "
+							 "included) once you open them: keep the description short, open it once, or set "
+							 "the address in valheim_radio.ini";
+			}
+			if (noServer != lastNoServer) {
+				if (!noServer.empty()) {
+					queueLog(noServer);
+				}
+				lastNoServer = noServer;
 			}
 			std::lock_guard< std::mutex > lock(g_idMtx);
 			if (ep != g_ident.endpoint && ep.valid()) {

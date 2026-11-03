@@ -1,3 +1,4 @@
+#include <algorithm>
 // End-to-end test: loads the built plugin like Mumble does, with a fake Mumble API and a fake Valheim
 // server mod on a local TCP port. Linux only. Run via tests/run_tests.sh.
 #include "MumblePlugin.h"
@@ -35,6 +36,8 @@ static mumble_error_t f_uname(mumble_plugin_id_t, mumble_connection_t, mumble_us
   const char* names[]={"","Ragnar","bjorn","Sigrid","xX_gamer_Xx","Nobody"}; *n=dupstr(names[u]); return MUMBLE_STATUS_OK;}
 static mumble_error_t f_desc(mumble_plugin_id_t, mumble_connection_t, mumble_channelid_t ch, const char**d){
   *d = dupstr(ch==0 ? "<p>Welcome</p>" : g_desc); return MUMBLE_STATUS_OK;}
+static mumble_error_t f_cname(mumble_plugin_id_t, mumble_connection_t, mumble_channelid_t ch, const char**n){
+  *n = dupstr(ch==0 ? "Root" : "Valheim"); return MUMBLE_STATUS_OK;}
 static mumble_error_t f_free(mumble_plugin_id_t, const void*p){free((void*)p);return MUMBLE_STATUS_OK;}
 static std::vector<uint8_t> sent; static std::string sentId;
 static mumble_error_t f_send(mumble_plugin_id_t, mumble_connection_t, const mumble_userid_t*,size_t,const uint8_t*d,size_t len,const char*id){ sent.assign(d,d+len); sentId=id; return MUMBLE_STATUS_OK;}
@@ -91,16 +94,22 @@ int main(int, char**argv){
   void*h=dlopen(argv[1],RTLD_NOW); if(!h){printf("%s\n",dlerror());return 1;}
   MumbleAPI api{}; api.log=f_log; api.getMumbleSetting_double=f_set; api.getActiveServerConnection=f_conn; api.isConnectionSynchronized=f_sync;
   api.getLocalUserID=f_self; api.getChannelOfUser=f_chan; api.getUsersInChannel=f_users; api.freeMemory=f_free; api.sendData=f_send;
-  api.getUserName=f_uname; api.getChannelDescription=f_desc;
-  g_desc = "<p>Our server. valheim-radio=127.0.0.1:" + std::to_string(port) + "/wrongkey</p>";
+  api.getUserName=f_uname; api.getChannelDescription=f_desc; api.getChannelName=f_cname;
+  g_desc = ""; // long description, not downloaded yet
   sym<void(*)(void*)>(h,"mumble_registerAPIFunctions")(&api);
   auto initPD=sym<uint8_t(*)(const char*const*,const uint64_t*,size_t)>(h,"mumble_initPositionalData");
   auto fetch=sym<bool(*)(float*,float*,float*,float*,float*,float*,const char**,const char**)>(h,"mumble_fetchPositionalData");
   auto recvData=sym<bool(*)(mumble_connection_t,mumble_userid_t,const uint8_t*,size_t,const char*)>(h,"mumble_onReceiveData");
   auto audio=sym<bool(*)(float*,uint32_t,uint16_t,uint32_t,bool,mumble_userid_t)>(h,"mumble_onAudioSourceFetched");
 
-  printf("plugin, wrong key in channel description:\n");
+  printf("plugin, channel description not downloaded:\n");
   sym<mumble_error_t(*)(mumble_plugin_id_t)>(h,"mumble_init")(7);
+  std::this_thread::sleep_for(1500ms);
+  CHECK(std::any_of(logs.begin(),logs.end(),[](const std::string&l){return l.find("no Valheim server address found (channel \"Valheim\": description empty")!=std::string::npos;}),
+        "says why it isn't connecting");
+
+  printf("plugin, wrong key in channel description:\n");
+  g_desc = "<p>Our server. valheim-radio=127.0.0.1:" + std::to_string(port) + "/wrongkey</p>";
   std::this_thread::sleep_for(1500ms);
   CHECK(srvRejected>0 && srvAuthed==0, "server rejected wrong key");
   CHECK(initPD(0,0,0)==MUMBLE_PDEC_ERROR_TEMP, "not linked");

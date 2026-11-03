@@ -175,7 +175,7 @@ void RadioVoice::process(float *pcm, uint32_t frames, uint16_t channels, uint32_
 		float noiseIn = white() * p.noise * w * w * (1.f - 0.6f * std::min(1.f, m_env * 8.f));
 		if (p.crackle > 0.f) {
 			if ((m_rng & 0xFFFFu) < static_cast< uint32_t >(65536.f * 0.00025f * p.crackle * w * w)) {
-				m_crackleAmp = 0.08f + 0.17f * std::fabs(white());
+				m_crackleAmp = 0.035f + 0.07f * std::fabs(white()); // quiet pops, well under the voice
 			}
 			noiseIn += m_crackleAmp * white();
 			m_crackleAmp *= crackleDecay;

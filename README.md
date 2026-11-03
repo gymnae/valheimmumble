@@ -54,8 +54,11 @@ Valheim server + mod ──TCP 47812, ~15×/s: every player's name, position, fa
 
    `valheim-radio=your.server.address:47812/yourkey`
 
-   Keep the description short (under about 128 characters). Mumble only sends longer descriptions to a
-   client after someone has opened them, so the plugin might not see the tag.
+   Keep the description short: under about 128 bytes, and the HTML Mumble's editor adds counts too.
+   Mumble only sends a longer description to a client after that client has opened it, so the plugin
+   doesn't see the tag. The log then says `no Valheim server address found (… not downloaded yet …)`.
+   Opening the description once (hover over the channel or click it) fixes it for that player for good,
+   because Mumble caches it.
 
 The mod doesn't need to be installed on clients, and vanilla clients can join.
 
@@ -131,7 +134,7 @@ armv7) and macOS (universal: x64 + arm64). All are cross-compiled from Linux wit
 (`pip install ziglang`):
 
 ```sh
-mumble-plugin/tools/build_all.sh dist/valheim_radio.mumble_plugin
+mumble-plugin/tools/build_all.sh   # -> dist/valheim_radio.mumble_plugin (a path argument is relative to mumble-plugin/)
 ```
 
 **Tests:** run `tests/run_tests.sh` (Linux). It covers:

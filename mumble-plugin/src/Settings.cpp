@@ -52,17 +52,44 @@ namespace {
 ; name =
 
 [radio]
-; Override the server's radio settings for yourself only.
-; enabled = true
-; start = 30        ; meters where the radio effect starts
-; full = 60         ; meters where it is complete
-; static = 0.035
-; distortion = 4
-; crackle = 1
-; squelch = true
-; keepVolume = true
-; radioVolume = 0.7
-; maxBoost = 4
+; How far-away players sound. The server admin sets these for everyone; a value
+; here overrides the server's for you only. Remove the ';' in front of a line
+; to use it. Changes apply live, no restart needed.
+;
+; How it works: up to `start` meters a voice is clean. Between `start` and
+; `full` it gradually turns into a walkie-talkie: the sound narrows to a thin
+; telephone-like band, gets a nasal "honk", some distortion and static. From
+; `full` on it is completely radio. The direction you hear it from stays right.
+;
+; enabled = true       ; false = no radio effect at all (plain Mumble 3D audio)
+; start = 30           ; meters where the radio effect starts fading in
+; full = 60            ; meters where the voice is completely radio
+;
+; --- character of the radio sound (all at full radio) ---
+; static = 0.035       ; background hiss; 0 = none, 0.1 = heavy (useful: 0 - 0.3).
+;                      ; It ducks while the person talks, like a real radio.
+; distortion = 4       ; how overdriven/crunchy the voice is; 0 = clean,
+;                      ; 8 = very crunchy (useful: 0 - 15)
+; crackle = 1          ; how often short pops/crackles occur; 0 = never,
+;                      ; 2 = twice as often (useful: 0 - 5)
+; squelch = true       ; short burst of static when a far-away player starts
+;                      ; talking, like keying a walkie-talkie
+;
+; --- volume over distance ---
+; keepVolume = true    ; true: the plugin sets the volume over distance itself:
+;                      ; full volume up to Mumble's "Minimum Distance", a
+;                      ; gentle fade to `radioVolume` at `start`, then
+;                      ; `radioVolume` however far away. false: Mumble's own
+;                      ; distance fade applies, far voices get very quiet.
+; radioVolume = 0.7    ; volume of radio voices; 1 = as loud as someone next
+;                      ; to you (useful: 0.05 - 1.5)
+; maxBoost = 4         ; limit for how much the plugin may amplify a voice to
+;                      ; undo Mumble's fade (useful: 1 - 20)
+;
+; Matching Mumble settings (Settings > Audio Output > Positional Audio), so
+; Mumble and the plugin agree and nothing needs amplifying:
+;   Minimum Distance = 2 m, Maximum Distance = `start` (30 m),
+;   Minimum Volume = `radioVolume` (70 %). Never set Minimum Volume to 0.
 )";
 
 } // namespace
