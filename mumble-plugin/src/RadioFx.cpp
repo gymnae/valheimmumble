@@ -117,7 +117,7 @@ void RadioVoice::process(float *pcm, uint32_t frames, uint16_t channels, uint32_
 		m_comp = targetComp;
 		if (p.squelch && targetWet > 0.3f) {
 			m_squelchTotal = m_squelchLeft = static_cast< uint32_t >(0.11f * fs);
-			m_squelchAmp                   = 0.22f * targetWet;
+			m_squelchAmp                   = 0.10f * targetWet; // a short hiss, well under the voice
 		}
 	}
 	m_lastSeen = nowSec;

@@ -67,9 +67,25 @@ static void fakeServer(int lfd, std::string key){
   }
 }
 
+// Mimics Mumble's AudioOutputSpeech buffer (480 frames + 20 samples lookahead, unconsumed samples
+// shifted to the front) and AudioOutput::mix's interaural delay, which reads up to 20 samples past
+// the block. Returns the largest mismatch between the delayed ear and the undelayed ear shifted by
+// 20 samples: 0 if every sample both ears hear went through the plugin exactly once.
+static float itdMismatch(bool(*audio)(float*,uint32_t,uint16_t,uint32_t,bool,mumble_userid_t), mumble_userid_t u){
+  const unsigned F=480, D=20; std::vector<float> buf(4*F), ear0, earD; unsigned filled=0, consume=0; long t=0;
+  for(int b=0;b<100;b++){
+    for(unsigned i=consume;i<filled;i++) buf[i-consume]=buf[i]; filled-=consume; consume=F;
+    while(filled<F+D){ for(unsigned i=0;i<F;i++,t++) buf[filled+i]=0.1f*sinf(t*2*3.14159f*300/48000); filled+=F; }
+    audio(buf.data(),F,1,48000,true,u);
+    for(unsigned i=0;i<F;i++){ ear0.push_back(buf[i]); earD.push_back(buf[i+D]); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  float worst=0; for(size_t i=F*5;i+D<ear0.size();i++) worst=std::max(worst,fabsf(earD[i]-ear0[i+D]));
+  return worst;
+}
 static double gainDb(bool(*audio)(float*,uint32_t,uint16_t,uint32_t,bool,mumble_userid_t), mumble_userid_t u, bool*mod){
   double ein=0,eout=0; *mod=false;
-  for(int b=0;b<150;b++){ std::vector<float> buf(480); for(int i=0;i<480;i++){ buf[i]=0.1f*sinf((b*480+i)*2*3.14159f*440/48000); ein+=buf[i]*buf[i]; }
+  for(int b=0;b<150;b++){ std::vector<float> buf(480+20); for(int i=0;i<480;i++){ buf[i]=0.1f*sinf((b*480+i)*2*3.14159f*440/48000); ein+=buf[i]*buf[i]; }
     *mod|=audio(buf.data(),480,1,48000,true,u); for(float v:buf) eout+=v*v; }
   return 10*log10(eout/ein);
 }
@@ -126,6 +142,8 @@ int main(int, char**argv){
   bool mod; double g;
   g=gainDb(audio,2,&mod); printf("        bjorn gain %.2f dB\n", g); CHECK(fabs(g)<0.5, "user 'bjorn' 5 m away (case-insensitive match): about unchanged");
   g=gainDb(audio,3,&mod); printf("        sigrid gain %.1f dB\n", g); CHECK(mod && g>3, "user 'Sigrid' 90 m away: radio + volume compensation");
+  float mm=itdMismatch(audio,3); printf("        interaural-delay mismatch %.6f\n", mm);
+  CHECK(mm<1e-6f, "positional audio's ear delay reads only processed samples (no raw slivers)");
   g=gainDb(audio,4,&mod); CHECK(!mod, "user 'xX_gamer_Xx' (no matching character): untouched");
   auto ann=vr::makeNameAnnouncement("Astrid"); CHECK(recvData(1,4,ann.data(),ann.size(),vr::kNameDataID), "name announcement accepted");
   g=gainDb(audio,4,&mod); CHECK(mod, "after announcing 'Astrid' (90 m away): radio");

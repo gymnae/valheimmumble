@@ -124,6 +124,18 @@ PaSettings g_pa;
 
 // ---- audio-thread-only state ----
 std::unordered_map< mumble_userid_t, vr::RadioVoice > g_voices;
+
+// With positional audio, Mumble delays one ear by up to INTERAURAL_DELAY samples and reads that far
+// past the block it hands us (AudioOutput::mix). Its buffer always holds that many extra valid samples
+// (AudioOutputSpeech::prepareSampleBuffer), which it then shifts to the front of the next block. So we
+// process them too, in place, and skip them next time - otherwise each ear gets a sliver of raw voice
+// spliced in every block, which sounds like a harsh, doubled effect.
+constexpr uint32_t kMumbleLookahead = 20; // samples (floats), = Mumble's INTERAURAL_DELAY at 48 kHz
+struct Lookahead {
+	uint32_t done = 0; // frames at the start of the next block that we already processed
+	double last   = -1;
+};
+std::unordered_map< mumble_userid_t, Lookahead > g_lookahead;
 std::atomic< bool > g_resetVoices{ false };
 
 // ---- strings handed to Mumble from fetchPositionalData (serialized by Mumble's lock) ----
@@ -658,6 +670,39 @@ bool findSelf(Clock::time_point now, vr::PlayerPose &out) {
 	return true;
 }
 
+// Audio thread: once per speaker, after ~3 s of talking, logs how much audio Mumble hands us per second
+// of real time. 1.0x is expected; 2.0x means each piece of audio is processed twice (e.g. two copies
+// of the plugin, or Mumble calling us twice), which doubles the radio effect.
+void measureAudioRate(mumble_userid_t uid, const std::string &name, uint32_t frames, uint16_t channels,
+					  uint32_t rate) {
+	struct Meter {
+		double last = -1, talkTime = 0, frames = 0;
+		bool done   = false;
+	};
+	static std::unordered_map< mumble_userid_t, Meter > meters;
+	Meter &m = meters[uid];
+	if (m.done || rate == 0) {
+		return;
+	}
+	const double now = nowSeconds();
+	if (m.last >= 0 && now - m.last < 0.1) { // continuous speech only
+		m.talkTime += now - m.last;
+		m.frames += frames;
+	}
+	m.last = now;
+	if (m.talkTime >= 3.0) {
+		m.done = true;
+		char buf[200];
+		const double ratio = m.frames / (m.talkTime * rate);
+		std::snprintf(buf, sizeof(buf), "audio from \"%s\": %.2fx real time, %u channel(s), %u Hz%s", name.c_str(),
+					  ratio, static_cast< unsigned >(channels), static_cast< unsigned >(rate),
+					  ratio > 1.5 ? " - WARNING: audio is processed more than once (two copies of the plugin "
+									"installed?), the radio effect is doubled"
+								  : "");
+		queueLog(buf);
+	}
+}
+
 // Audio thread: logs (via the worker) when a speaker's state changes, so a missing radio effect can be
 // traced to name matching or distance.
 void reportSpeaker(mumble_userid_t uid, const std::string &name, bool matched, float distance,
@@ -836,6 +881,7 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 	}
 	if (g_resetVoices.exchange(false)) {
 		g_voices.clear();
+		g_lookahead.clear();
 	}
 	const auto now = Clock::now();
 
@@ -862,6 +908,7 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 		std::lock_guard< std::mutex > lock(g_snapMtx);
 		vr::PlayerPose me;
 		if (!findSelf(now, me)) {
+			g_lookahead.erase(userID);
 			return false;
 		}
 		cfg = g_snap.radio;
@@ -877,7 +924,10 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 		}
 	}
 	reportSpeaker(userID, speakerName, matched, distance, cfg);
+	measureAudioRate(userID, speakerName.empty() ? "#" + std::to_string(userID) : speakerName, sampleCount,
+					 channelCount, sampleRate);
 	if (!cfg.enabled) {
+		g_lookahead.erase(userID);
 		return false;
 	}
 
@@ -897,12 +947,26 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 		}
 	}
 
+	// Which part of the block (plus Mumble's lookahead) still needs processing.
+	Lookahead &la         = g_lookahead[userID];
+	const double nowSec   = nowSeconds();
+	const double frameSec = sampleRate ? static_cast< double >(sampleCount) / sampleRate : 0.01;
+	if (la.last < 0 || nowSec - la.last > std::max(0.05, 3 * frameSec + 0.02)) {
+		la.done = 0; // a new buffer: nothing in it has been processed yet
+	}
+	la.last                  = nowSec;
+	const uint32_t ahead     = channelCount ? kMumbleLookahead / channelCount : 0;
+	const uint32_t skip      = std::min(la.done, sampleCount);
+	const uint32_t todo      = sampleCount + ahead - skip;
+	float *const start       = pcm + static_cast< size_t >(skip) * channelCount;
+
 	auto vit = g_voices.find(userID);
 	if (!ownsVolume && wet <= 0.f && (vit == g_voices.end() || vit->second.currentWet() < 1e-4f)) {
 		// Close by, nothing to change and not fading out of radio mode: leave the audio untouched.
 		if (vit != g_voices.end()) {
-			vit->second.process(pcm, sampleCount, channelCount, sampleRate, 0.f, 1.f, nowSeconds(), {});
+			vit->second.process(start, todo, channelCount, sampleRate, 0.f, 1.f, nowSec, {});
 		}
+		la.done = 0;
 		return false;
 	}
 
@@ -911,6 +975,7 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 	params.drive   = cfg.drive;
 	params.crackle = cfg.crackle;
 	params.squelch = cfg.squelch;
-	g_voices[userID].process(pcm, sampleCount, channelCount, sampleRate, wet, comp, nowSeconds(), params);
+	g_voices[userID].process(start, todo, channelCount, sampleRate, wet, comp, nowSec, params);
+	la.done = ahead;
 	return true;
 }
