@@ -62,19 +62,27 @@ The mod doesn't need to be installed on clients, and vanilla clients can join.
 ## Player setup
 
 1. Mumble ≥ 1.5: *Settings → Plugins → Install plugin…*, pick `valheim_radio.mumble_plugin`, enable
-   **Valheim** and tick *Positional audio* for it.
+   **Valheim** and tick *Positional audio* for it. *Link to game and transmit position* must be on.
 2. *Settings → Audio Output → Positional Audio*:
-   - enable it (you need stereo output or headphones);
-   - recommended values:
+   - enable it. You need stereo output. A Bluetooth headset in hands-free (mic) mode is mono, and
+     Mumble skips 3D audio on mono output. Tick *Headphones* if you use them;
+   - recommended values (they make Mumble's fade match the plugin's, so nothing needs correcting):
 
      | Setting | Value |
      |---|---|
-     | Minimum Distance | 2 m |
-     | Maximum Distance | 60 m (the server's `FullDistance`) |
-     | Minimum Volume | 30 % |
+     | Minimum Distance | 2 m (full volume this close) |
+     | Maximum Distance | 30 m (the server's `StartDistance`) |
+     | Minimum Volume | 70 % (the server's `RadioVolume`) |
+     | Bloom | leave as is |
 
-     **Minimum Volume must be above 0**, otherwise far voices are muted before they can turn into radio.
-3. *Settings → Audio Input → Transmit position* must be on.
+     If the server admin changes `StartDistance` or `RadioVolume`, change these to match. The Mumble
+     log prints your settings and the server's values when you're linked.
+
+     Other values work too, because the plugin corrects Mumble's fade (`KeepVolume`). But **Minimum
+     Volume must never be 0**, or Mumble mutes far voices before they can turn into radio. Below about
+     `RadioVolume` ÷ `MaxBoost` (18 % by default), far voices get quieter than intended. The log warns
+     about both.
+3. *Settings → Audio Input → Transmit position* must be on, or nobody hears *you* in 3D.
 4. Use your character name as your Mumble name, or set it in the ini (below).
 5. Join the channel and load into the world. Mumble's log shows `Valheim Radio: found you ("name") in the
    game - positional audio active`.
