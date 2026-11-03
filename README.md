@@ -36,8 +36,9 @@ Valheim server + mod ──TCP 47812, ~15×/s: every player's name, position, fa
   - Between `StartDistance` and `FullDistance` the voice morphs continuously: the band-pass narrows from
     20 Hz–20 kHz to 350 Hz–2.8 kHz, and a 1.7 kHz "honk", saturation and static fade in. Changes are
     smoothed over about 0.35 s.
-  - With `KeepVolume`, the plugin undoes Mumble's distance fade for radio voices. They then play at
-    `RadioVolume` whatever the distance.
+  - With `KeepVolume` (default), the plugin replaces Mumble's distance fade with its own: full volume up
+    to Mumble's *Minimum Distance*, a gentle fade down to `RadioVolume` at `StartDistance`, then
+    `RadioVolume` whatever the distance. Mumble's *Maximum Distance* then barely matters.
 
 ## Server admin setup
 
@@ -143,7 +144,8 @@ mumble-plugin/tools/build_all.sh dist/valheim_radio.mumble_plugin
 - **Positions lag** about 100–200 ms (client → server → plugin). That's fine for voice.
 - **Privacy:** positions of everyone on the server go to every plugin that knows the key. On PvP servers
   that is a potential radar.
-- **KeepVolume** assumes positional audio is active in the listener's Mumble. If it's off, radio voices
-  get up to `MaxBoost` louder.
+- **KeepVolume** assumes Mumble actually faded the voice by distance: positional audio is on in the
+  listener's Mumble *and* the speaker transmits position. If not, distant voices get up to `MaxBoost`
+  louder.
 - **Effect scope:** only users in your own Mumble channel get the radio effect, not users heard through
   linked channels or channel listeners.

@@ -131,8 +131,17 @@ void RadioVoice::process(float *pcm, uint32_t frames, uint16_t channels, uint32_
 	m_comp            = comp1;
 
 	if (wet0 < 1e-4f && wet1 < 1e-4f && m_squelchLeft == 0) {
-		// Fully close range: leave the audio untouched. Keep filters cleared so a later fade-in starts clean.
+		// Close range: no effect, only the distance gain. Keep filters cleared so a later fade-in starts clean.
 		resetState();
+		if (std::fabs(comp0 - 1.f) > 1e-4f || std::fabs(comp1 - 1.f) > 1e-4f) {
+			const float inv = 1.f / static_cast< float >(frames);
+			for (uint32_t i = 0; i < frames; ++i) {
+				const float g = lerp(comp0, comp1, static_cast< float >(i + 1) * inv);
+				for (uint16_t c = 0; c < channels; ++c) {
+					pcm[i * channels + c] *= g;
+				}
+			}
+		}
 		return;
 	}
 
@@ -158,7 +167,7 @@ void RadioVoice::process(float *pcm, uint32_t frames, uint16_t channels, uint32_
 		const float t    = static_cast< float >(i + 1) * invFrames;
 		const float w    = lerp(wet0, wet1, t);
 		const float comp = lerp(comp0, comp1, t);
-		const float gain = lerp(1.f, comp, w);
+		const float gain = comp;
 		const float gd   = 1.f + p.drive * w;
 		const float satNorm = std::pow(gd, -0.62f);
 

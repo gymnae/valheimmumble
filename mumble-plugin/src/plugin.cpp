@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -166,23 +167,58 @@ float mumbleAttenuation(float d, const PaSettings &s) {
 	return std::pow(10.f, std::log10(mvol) * drel);
 }
 
+// The volume we want a voice to have at distance d (used with KeepVolume): full volume up to Mumble's
+// Minimum Distance, then a gentle fade (linear in dB) down to RadioVolume at the radio start distance,
+// and RadioVolume from there on, however far away. Mumble's own fade is divided out (see comp below),
+// so this curve applies whatever the listener's Maximum Distance / Minimum Volume are.
+float desiredGain(float d, const vr::RadioConfig &cfg, const PaSettings &s) {
+	const float nearDist = std::max(s.minDistance, 0.f);
+	const float vol  = std::max(cfg.radioVolume, 0.005f);
+	if (d <= nearDist) {
+		return 1.f;
+	}
+	if (d >= cfg.start || cfg.start <= nearDist) {
+		return vol;
+	}
+	return std::pow(10.f, std::log10(vol) * (d - nearDist) / (cfg.start - nearDist));
+}
+
 // ================================================================================================
 // Network thread
 // ================================================================================================
 
-socket_t connectTcp(const vr::Endpoint &ep) {
+std::string addrToString(const addrinfo *ai) {
+	char host[64] = "?";
+	getnameinfo(ai->ai_addr, static_cast< socklen_t >(ai->ai_addrlen), host, sizeof(host), nullptr, 0, NI_NUMERICHOST);
+	return ai->ai_family == AF_INET6 ? std::string("[") + host + "]" : std::string(host);
+}
+
+// Tries every address the host resolves to (IPv6 and IPv4), starting with the one at index
+// `rotate` (modulo the count). `used` gets the address that worked; `detail` lists each
+// address's outcome for the log when none did.
+socket_t connectTcp(const vr::Endpoint &ep, size_t rotate, std::string &used, std::string &detail) {
+	used.clear();
+	detail.clear();
 	addrinfo hints{};
 	hints.ai_family   = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	addrinfo *res     = nullptr;
 	const std::string port = std::to_string(ep.port);
 	if (getaddrinfo(ep.host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
+		detail = "cannot resolve host name";
 		return kBadSocket;
 	}
+	std::vector< addrinfo * > addrs;
+	for (addrinfo *ai = res; ai; ai = ai->ai_next) {
+		addrs.push_back(ai);
+	}
 	socket_t result = kBadSocket;
-	for (addrinfo *ai = res; ai && result == kBadSocket && !g_stop.load(); ai = ai->ai_next) {
+	for (size_t i = 0; i < addrs.size() && result == kBadSocket && !g_stop.load(); ++i) {
+		addrinfo *ai = addrs[(rotate + i) % addrs.size()];
+		const std::string name = addrToString(ai);
 		socket_t s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 		if (s == kBadSocket) {
+			detail += (detail.empty() ? "" : ", ") + name + " unsupported";
 			continue;
 		}
 		setNonBlocking(s, true);
@@ -193,12 +229,14 @@ socket_t connectTcp(const vr::Endpoint &ep) {
 		timeval tv{ kConnectTimeoutMs / 1000, (kConnectTimeoutMs % 1000) * 1000 };
 		int err         = -1;
 		socklen_t errLen = sizeof(err);
-		if (select(static_cast< int >(s) + 1, nullptr, &wfds, nullptr, &tv) == 1
-			&& getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast< char * >(&err), &errLen) == 0 && err == 0) {
+		const int ready = select(static_cast< int >(s) + 1, nullptr, &wfds, nullptr, &tv);
+		if (ready == 1 && getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast< char * >(&err), &errLen) == 0 && err == 0) {
 			setNonBlocking(s, false);
 			result = s;
+			used   = name;
 		} else {
 			closeSocket(s);
+			detail += (detail.empty() ? "" : ", ") + name + (ready == 1 ? " refused" : " timed out");
 		}
 	}
 	freeaddrinfo(res);
@@ -251,6 +289,8 @@ void netLoop() {
 	std::vector< uint8_t > rx;
 	auto nextAttempt = Clock::now();
 	std::string lastError;
+	std::string usedAddr;
+	size_t rotate = 0; // which resolved address to try first
 	bool gotData = false;
 	uint8_t buf[8192];
 
@@ -258,7 +298,8 @@ void netLoop() {
 		if (s != kBadSocket) {
 			closeSocket(s);
 			s = kBadSocket;
-			queueLog("disconnected from " + current.host + ":" + std::to_string(current.port) + " (" + why + ")");
+			queueLog("disconnected from " + current.host + ":" + std::to_string(current.port) + " via " + usedAddr + " ("
+					 + why + ")");
 		}
 		std::lock_guard< std::mutex > lock(g_snapMtx);
 		g_snap.valid = false;
@@ -280,13 +321,17 @@ void netLoop() {
 			}
 			current     = want;
 			nextAttempt = Clock::now() + kReconnectDelay;
-			s           = connectTcp(current);
-			if (s == kBadSocket || !sendAll(s, vr::makeHello(current.key))) {
-				if (s != kBadSocket) {
-					closeSocket(s);
-					s = kBadSocket;
-				}
-				const std::string err = "cannot reach Valheim server at " + current.host + ":" + std::to_string(current.port);
+			std::string detail;
+			s = connectTcp(current, rotate, usedAddr, detail);
+			if (s != kBadSocket && !sendAll(s, vr::makeHello(current.key))) {
+				closeSocket(s);
+				s      = kBadSocket;
+				detail = usedAddr + " closed the connection";
+				++rotate;
+			}
+			if (s == kBadSocket) {
+				const std::string err = "cannot reach Valheim server at " + current.host + ":" + std::to_string(current.port)
+										+ " (" + detail + ")";
 				if (err != lastError) {
 					queueLog(err + " (retrying)");
 					lastError = err;
@@ -296,12 +341,20 @@ void netLoop() {
 			lastError.clear();
 			rx.clear();
 			gotData = false;
-			queueLog("connected to Valheim server " + current.host + ":" + std::to_string(current.port));
+			queueLog("connected to Valheim server " + current.host + ":" + std::to_string(current.port) + " via " + usedAddr);
 		}
 
 		const int n = static_cast< int >(recv(s, reinterpret_cast< char * >(buf), sizeof(buf), 0));
 		if (n == 0) {
-			disconnect(gotData ? "server closed the connection" : "rejected by server - wrong key?");
+			if (!gotData) {
+				// Closed before the first snapshot: a wrong key, or something other than the mod
+				// accepted the connection (e.g. a Docker/router proxy on IPv6 with nothing behind it).
+				// Start with the host's next address next time.
+				++rotate;
+				disconnect("closed before any data - wrong key, or nothing behind this address/port?");
+			} else {
+				disconnect("server closed the connection");
+			}
 			continue;
 		}
 		if (n < 0) {
@@ -384,6 +437,50 @@ void refreshPaSettings() {
 	}
 }
 
+// Logs Mumble's positional-audio settings whenever they (or the radio config) change, with a warning
+// if they keep far voices from being heard as radio.
+void checkPaSettings(const vr::RadioOverrides &overrides) {
+	static std::string last;
+	PaSettings pa;
+	{
+		std::lock_guard< std::mutex > lock(g_paMtx);
+		pa = g_pa;
+	}
+	vr::RadioConfig cfg;
+	{
+		std::lock_guard< std::mutex > lock(g_snapMtx);
+		if (!snapFresh(Clock::now())) {
+			return;
+		}
+		cfg = g_snap.radio;
+	}
+	overrides.applyTo(cfg);
+	if (!pa.valid || !cfg.enabled) {
+		return;
+	}
+	char buf[512];
+	std::snprintf(buf, sizeof(buf),
+				  "Mumble positional audio: minimum distance %.1f m, maximum distance %.1f m, minimum volume %.0f%%; "
+				  "radio from %.0f m (full at %.0f m) at %.0f%% volume%s",
+				  pa.minDistance, pa.maxDistance, pa.minVolume * 100.f, cfg.start, cfg.full, cfg.radioVolume * 100.f,
+				  cfg.keepVolume ? ", volume curve set by the plugin" : ", Mumble's volume curve (KeepVolume off)");
+	std::string msg = buf;
+	if (cfg.keepVolume && pa.minVolume < 0.02f) {
+		msg += ". WARNING: Minimum Volume is 0 - Mumble mutes voices beyond the maximum distance, so they can't "
+			   "become radio. Set Minimum Volume to 30% or more.";
+	} else if (cfg.keepVolume && cfg.radioVolume / std::max(pa.minVolume, 1e-3f) > std::max(cfg.maxBoost, 1.f)) {
+		std::snprintf(buf, sizeof(buf),
+					  ". WARNING: Minimum Volume is too low for the radio volume (needs %.1fx boost, MaxBoost is %.1f) - "
+					  "far voices will be quieter. Raise Minimum Volume.",
+					  cfg.radioVolume / std::max(pa.minVolume, 1e-3f), cfg.maxBoost);
+		msg += buf;
+	}
+	if (msg != last) {
+		last = msg;
+		logMsg(msg);
+	}
+}
+
 struct MumbleView {
 	bool connected = false;
 	mumble_connection_t conn{};
@@ -454,6 +551,7 @@ void workerLoop() {
 			nextSettings = now + kSettingsInterval;
 			refreshPaSettings();
 			settingsChanged = file.poll(local);
+			checkPaSettings(local.radio);
 		}
 		if (now >= nextMumble || settingsChanged) {
 			nextMumble = now + kMumbleInterval;
@@ -524,6 +622,38 @@ bool findSelf(Clock::time_point now, vr::PlayerPose &out) {
 	}
 	out = it->second;
 	return true;
+}
+
+// Audio thread: logs (via the worker) when a speaker's state changes, so a missing radio effect can be
+// traced to name matching or distance.
+void reportSpeaker(mumble_userid_t uid, const std::string &name, bool matched, float distance,
+				   const vr::RadioConfig &cfg) {
+	static std::unordered_map< mumble_userid_t, int > states; // 1 unmatched, 2 direct, 3 radio
+	int &st = states[uid];
+	int next;
+	if (!matched) {
+		next = 1;
+	} else if (distance > cfg.start) {
+		next = 3;
+	} else if (st == 3 && distance > cfg.start - 3.f) {
+		next = 3; // hysteresis
+	} else {
+		next = 2;
+	}
+	if (next == st) {
+		return;
+	}
+	st = next;
+	char buf[96];
+	std::snprintf(buf, sizeof(buf), "%.0f m away", distance);
+	if (next == 1) {
+		queueLog("hearing Mumble user \"" + name + "\" but no game character has that name - no radio effect for "
+				 "them (their character name must equal their Mumble name, or they set it in their valheim_radio.ini)");
+	} else if (next == 2) {
+		queueLog("hearing \"" + name + "\", " + buf + " - direct voice");
+	} else {
+		queueLog("hearing \"" + name + "\", " + buf + " - radio" + (cfg.enabled ? "" : " (but radio is disabled)"));
+	}
 }
 
 } // namespace
@@ -693,6 +823,7 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 
 	vr::RadioConfig cfg;
 	float wet = 0.f, distance = 0.f;
+	bool matched = false;
 	{
 		std::lock_guard< std::mutex > lock(g_snapMtx);
 		vr::PlayerPose me;
@@ -708,14 +839,18 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 			const float dz = it->second.pos[2] - me.pos[2];
 			distance       = std::sqrt(dx * dx + dy * dy + dz * dz);
 			wet            = vr::radioAmount(distance, cfg.start, std::max(cfg.full, cfg.start));
+			matched        = true;
 		}
 	}
+	reportSpeaker(userID, speakerName, matched, distance, cfg);
 	if (!cfg.enabled) {
 		return false;
 	}
 
-	float comp = 1.f;
-	if (cfg.keepVolume) {
+	// With KeepVolume the plugin owns the distance fade: undo Mumble's attenuation and apply ours.
+	float comp        = 1.f;
+	bool ownsVolume   = false;
+	if (cfg.keepVolume && matched) {
 		PaSettings pa;
 		{
 			std::lock_guard< std::mutex > lock(g_paMtx);
@@ -723,15 +858,16 @@ bool mumble_onAudioSourceFetched(float *pcm, uint32_t sampleCount, uint16_t chan
 		}
 		if (pa.valid) {
 			const float att = mumbleAttenuation(distance, pa);
-			comp            = std::clamp(cfg.radioVolume / std::max(att, 1e-4f), 0.f, std::max(cfg.maxBoost, 1.f));
+			comp = std::clamp(desiredGain(distance, cfg, pa) / std::max(att, 1e-4f), 0.f, std::max(cfg.maxBoost, 1.f));
+			ownsVolume = std::fabs(comp - 1.f) > 1e-3f;
 		}
 	}
 
 	auto vit = g_voices.find(userID);
-	if (wet <= 0.f && (vit == g_voices.end() || vit->second.currentWet() < 1e-4f)) {
-		// Close by and not fading out of radio mode: leave the audio untouched.
+	if (!ownsVolume && wet <= 0.f && (vit == g_voices.end() || vit->second.currentWet() < 1e-4f)) {
+		// Close by, nothing to change and not fading out of radio mode: leave the audio untouched.
 		if (vit != g_voices.end()) {
-			vit->second.process(pcm, sampleCount, channelCount, sampleRate, 0.f, comp, nowSeconds(), {});
+			vit->second.process(pcm, sampleCount, channelCount, sampleRate, 0.f, 1.f, nowSeconds(), {});
 		}
 		return false;
 	}

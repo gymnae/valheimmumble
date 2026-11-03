@@ -41,7 +41,7 @@ class RadioVoice {
 public:
 	// Processes interleaved PCM in place.
 	//  targetWet  : 0..1 how much "radio" this voice should be (from radioAmount()).
-	//  targetComp : gain the fully-radio voice should get (used to undo Mumble's distance attenuation).
+	//  targetComp : gain applied to the voice at any wet value (replaces Mumble's distance fade by ours).
 	//  nowSec     : monotonic time, used to detect the start of a new transmission.
 	void process(float *pcm, uint32_t frames, uint16_t channels, uint32_t rate, float targetWet, float targetComp,
 				 double nowSec, const RadioParams &p);
